@@ -19,8 +19,9 @@
 #define MAC_STR_BUF_LEN  MAC_ADDR_LEN*2 + 5 + 1
 #define ETH_HEADER_SIZE  14   // 6 + 6 + 2
 
-#define SYS_SRC_MAC      "/sys/class/net/%s/address"
-#define PROC_ARP         "/proc/net/arp"
+#define SYS_NET_PATH      "/sys/class/net/%s/address"
+#define SYS_NET_PATH_LEN  24
+#define PROC_ARP_PATH     "/proc/net/arp"
 #define ARP_TABLE_ENTRY_LEN 128 // interface name max-length : 15.
 
 #define ARP_REPLY 2
@@ -86,7 +87,11 @@ int main(int argc, char* argv[]) {
   }
 
   eth_arp_packet* packet = (eth_arp_packet*)malloc(sizeof(eth_arp_packet));
-  fill_eth_arp_packet(packet, dev, gateway_ip_str, victim_ip_str);
+  if (fill_eth_arp_packet(packet, dev, gateway_ip_str, victim_ip_str) != 0) {
+    perror("[*] fill_eth_arp_packet error");
+    pcap_close(handle);
+    return -1;
+  };
   print_mac_addr("src_mac : ", (uint8_t (*)[6])packet->eth.src_addr);
   print_mac_addr("dst_mac : ", (uint8_t (*)[6])packet->eth.dst_addr);  
   print_packet((u_char*)packet);
@@ -120,9 +125,9 @@ void print_packet(u_char* p) {
 }
 
 char* get_dev_mac(const char* dev) {
-  size_t mac_path_len = 24 + strlen(dev); // strlen("/sys/...")+1(\0) == 24
+  size_t mac_path_len = SYS_NET_PATH_LEN + strlen(dev);
   char* mac_path = (char*)malloc(mac_path_len); 
-  snprintf(mac_path, mac_path_len, SYS_SRC_MAC, dev);
+  snprintf(mac_path, mac_path_len, SYS_NET_PATH, dev);
 
   FILE* fp = fopen(mac_path, "r");
   if (!fp) {
@@ -139,9 +144,9 @@ char* get_dev_mac(const char* dev) {
 }
 
 char* get_hosts_mac(const char* target_ip_str) {
-  FILE* fp = fopen(PROC_ARP, "r");
+  FILE* fp = fopen(PROC_ARP_PATH, "r");
   if (!fp) {
-      fprintf(stderr, "[*] fopen(%s) error\n", PROC_ARP);
+      fprintf(stderr, "[*] fopen(%s) error\n", PROC_ARP_PATH);
       return NULL;
   }
   
@@ -199,7 +204,6 @@ void fill_eth_header(eth_header* eth, const char* src_mac_str, const char* dst_m
   /** fill Ethernet header : MAC address 
    * output : (indirect) filled eth_header*
    * **/
-  
   memcpy(&eth->src_addr, ether_aton(src_mac_str), MAC_ADDR_LEN);
   memcpy(&eth->dst_addr, ether_aton(dst_mac_str), MAC_ADDR_LEN);
   eth->ether_type = htons(ETH_P_ARP);
