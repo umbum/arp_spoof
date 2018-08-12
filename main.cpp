@@ -65,9 +65,9 @@ class ArpHandler {
 		}
 		return 1;
 	}
-	int recvARPReply(char *src_ip_str, char *mac_str) {
+	int recvARPReply(char *sender_ip_str, char *mac_str) {
 		/**
-		 * input  : src_ip_str
+		 * input  : sender_ip_str
 		 * output : mac_str (indirect)
 		 * */
 		while (true) {
@@ -87,7 +87,7 @@ class ArpHandler {
 				if (arp->opcode == htons(ArpOpcode::REPLY)) {
 					struct in_addr src_ip;
 					src_ip.s_addr = arp->src_ip;
-					if (!strncmp(inet_ntoa(src_ip), src_ip_str, Len::IP_STR_BUF - 1)) {
+					if (!strncmp(inet_ntoa(src_ip), sender_ip_str, Len::IP_STR_BUF - 1)) {
 						strncpy(mac_str, ether_ntoa((ether_addr *)arp->src_mac), Len::MAC_STR_BUF - 1);
 						return 1;
 					}
